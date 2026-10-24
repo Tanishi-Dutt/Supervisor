@@ -31,6 +31,12 @@ def _cell(value, limit: int = 40) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+def _source(proposal: dict) -> str:
+    # diagnose.py tags its output; anything untagged came from a rule-based fake.
+    source = proposal.get("source") or "fallback"
+    return "rule-based fallback" if source == "fallback" else f"{source} (local LLM)"
+
+
 def write_report(run_id: str) -> str:
     """Compile a Markdown incident report for one run and return its path."""
     os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -62,6 +68,7 @@ def write_report(run_id: str) -> str:
 - **Flag Detail:** {flag_info.get('detail', 'N/A')}
 - **Diagnosed Failure Type:** {diagnosis_info.get('failure_type', 'N/A')}
 - **Root Cause:** {diagnosis_info.get('root_cause', 'N/A')}
+- **Diagnosed By:** {_source(diagnosis_info) if diagnosis_info else 'N/A'}
 - **Enforced Action:** `{last_event.get('action', 'N/A')}`
 - **First Flagged At Step:** {meta.get('first_flag_step') or 'N/A'}
 - **Interventions:** {meta.get('interventions', 0)} · **Policy Vetoes:** {meta.get('vetoes', 0)}
@@ -72,13 +79,13 @@ def write_report(run_id: str) -> str:
 """
 
     if events:
-        report_md += "| Step | Flag | LLM Proposed | Enforced | Vetoed |\n"
-        report_md += "|:---:|:---|:---|:---|:---:|\n"
+        report_md += "| Step | Flag | Proposed | Proposed By | Enforced | Vetoed |\n"
+        report_md += "|:---:|:---|:---|:---|:---|:---:|\n"
         for e in events:
             flag = e.get("flag") or {}
             proposal = e.get("proposal") or {}
             report_md += (f"| {e.get('step', '?')} | `{flag.get('kind', '?')}` "
-                          f"| `{proposal.get('action', '?')}` | `{e.get('action', '?')}` "
+                          f"| `{proposal.get('action', '?')}` | {_source(proposal)} | `{e.get('action', '?')}` "
                           f"| {'YES' if e.get('vetoed') else 'no'} |\n")
     else:
         report_md += "No interventions were needed.\n"
@@ -101,12 +108,13 @@ def write_report(run_id: str) -> str:
     else:
         report_md += "| - | No steps recorded | - | - | - |\n"
 
+    sources = sorted({_source(e.get("proposal") or {}) for e in events})
     deception = any((e.get("flag") or {}).get("kind") == "deception" for e in events)
     report_md += f"""
 ---
 
 ## 4. Safety Guardrail Audit
-- **LLM Model Used:** Qwen3.5 9B (Local)
+- **Diagnosis Sources:** {", ".join(sources) if sources else "N/A (no interventions)"}
 - **Deception Detected:** {"YES" if deception else "NO"}
 - **Policy Enforcement:** Hard veto checked against ground-truth evidence before execution.
 
