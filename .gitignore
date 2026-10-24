@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.db
+reports/
+.session
+.fake_store.json
+.fake_store.tmp
