@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight Recorder City</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #fafbfc; --ink: #1f2937; --muted: #6b7280; --line: #e3e7ee; --card: #ffffff;
+    --run: #4f7cff; --recover: #f59e0b; --ok: #10b981; --stop: #9ca3af; --flag: #ef4444;
+    --veto: #dc2626; --gold: #f5b301; --beam: rgba(56, 189, 248, .22);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+
+  header { height: 56px; display: flex; align-items: center; gap: 16px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--card); }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px; font-weight: 600; font-size: 12px; letter-spacing: .04em; background: #eef1f5; color: var(--muted); }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.live { background: #dcfce7; color: #15803d; } .pill.live .dot { animation: blink 1.2s infinite; }
+  .pill.offline { background: #fee2e2; color: var(--veto); }
+  .pill.complete { background: #dbeafe; color: #1d4ed8; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .legend { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-size: 12px; align-items: center; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  header button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+
+  main { display: grid; grid-template-columns: 1fr 330px; height: calc(100% - 56px); }
+  #stage { position: relative; overflow: hidden; }
+  #city { width: 100%; height: 100%; display: block; }
+  aside { border-left: 1px solid var(--line); background: var(--card); overflow-y: auto; padding: 14px 16px; }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 6px 0 8px; }
+  .agent { display: grid; grid-template-columns: 12px 1fr auto; gap: 2px 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid #f1f3f7; }
+  .agent .sw { width: 10px; height: 10px; border-radius: 50%; }
+  .agent .nm { font-weight: 600; }
+  .agent .st { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .agent .act { grid-column: 2 / 4; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: #374151; }
+  .log div { padding: 3px 0; border-bottom: 1px dashed #eef0f4; }
+  .log .pin { background: #fef2f2; color: var(--veto); border-left: 3px solid var(--veto); padding-left: 6px; margin-bottom: 4px; }
+
+  /* SVG city */
+  .bld { fill: #fff; stroke: #d7dce5; stroke-width: 1.5; }
+  .blabel { font-size: 13px; font-weight: 700; text-anchor: middle; fill: var(--ink); }
+  .btools { font-size: 10px; text-anchor: middle; fill: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .road { stroke: #eef1f5; stroke-width: 16; stroke-linecap: round; fill: none; }
+  .pad { fill: #fff; stroke: #d7dce5; stroke-width: 1.5; }
+  .padlabel { font-size: 12px; font-weight: 600; text-anchor: middle; fill: var(--ink); }
+  .padnum { font-size: 10px; text-anchor: middle; fill: var(--muted); }
+
+  .mover { transition: transform .55s cubic-bezier(.45, 0, .2, 1); }
+  .bob { animation: bob 1.6s ease-in-out infinite; }
+  .bot .body { fill: var(--c, var(--run)); transition: fill .3s; }
+  .bot .head { fill: #fff; stroke: var(--c, var(--run)); stroke-width: 2; transition: stroke .3s; }
+  .bot .num { fill: #fff; font-size: 10px; font-weight: 800; text-anchor: middle; }
+  .bot.st-running { --c: var(--run); } .bot.st-recovering { --c: var(--recover); }
+  .bot.st-recovered, .bot.st-success_untouched { --c: var(--ok); }
+  .bot.st-stopped { --c: var(--stop); } .bot.st-flagged { --c: var(--flag); }
+  .bot.st-stopped .bob, .bot.st-recovered .bob, .bot.st-success_untouched .bob { animation-duration: 3.2s; }
+
+  .bubble rect { fill: #fff; stroke: #d7dce5; }
+  .bubble text { font-size: 11px; fill: var(--ink); text-anchor: middle; }
+  .bubble.err rect { stroke: #fca5a5; } .bubble.err text { fill: #b91c1c; }
+  .bubble.ok rect { stroke: #86efac; } .bubble.ok text { fill: #15803d; }
+  .bubble.stop text { fill: var(--muted); }
+  .bubble.claim rect { stroke: var(--ok); stroke-width: 2; fill: #f0fdf4; } .bubble.claim text { fill: #166534; font-weight: 700; font-size: 12px; }
+  .evidence rect { fill: var(--veto); } .evidence text { fill: #fff; font-size: 11px; font-weight: 700; text-anchor: middle; }
+
+  .drone .rotor { animation: spin .25s linear infinite; transform-box: fill-box; transform-origin: center; }
+  .beam { fill: var(--beam); opacity: 0; transition: opacity .25s; }
+  .beam.on { opacity: 1; }
+  .ring { fill: none; stroke: var(--flag); stroke-width: 3; animation: ring 1s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  .station circle { fill: #fff; stroke: #d7dce5; stroke-width: 1.5; transition: all .2s; }
+  .station.on circle { stroke: #38bdf8; stroke-width: 4; fill: #f0f9ff; }
+  .station.veto circle { stroke: var(--veto); stroke-width: 4; fill: #fef2f2; }
+  .station text { text-anchor: middle; }
+  .tower-body { fill: #1f2937; transition: fill .4s; }
+  .beacon { fill: #22c55e; animation: blink 1s infinite; }
+
+  body.offline #city .bots, body.offline #city .bubbles { filter: grayscale(.85) opacity(.6); }
+  body.offline .bob, body.offline .drone .rotor, body.offline .beacon { animation-play-state: paused; }
+  body.offline .beacon { fill: #9ca3af; }
+  body.offline .tower-body { fill: #9ca3af; }
+
+  #banner { position: absolute; left: 50%; top: 18px; transform: translate(-50%, -250%); padding: 10px 18px; border-radius: 12px; font-weight: 700; font-size: 15px; box-shadow: 0 8px 30px rgba(0,0,0,.12); transition: transform .35s; white-space: nowrap; }
+  #banner.show { transform: translate(-50%, 0); }
+  #banner.down { background: var(--veto); color: #fff; }
+  #banner.up { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+  #banner.wait { background: #fff; color: var(--muted); border: 1px solid var(--line); }
+
+  .card { position: absolute; width: 300px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; box-shadow: 0 10px 30px rgba(15,23,42,.14); opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .card.show { opacity: 1; transform: none; }
+  .card .flag { font-weight: 800; color: var(--flag); font-size: 12px; letter-spacing: .04em; }
+  .card .detail { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+  .card .row { font-size: 13px; padding: 4px 0; border-top: 1px solid #f1f3f7; }
+  .card .row.policy { opacity: 0; transition: opacity .2s; } .card.policy .row.policy { opacity: 1; }
+  .card .ok { color: #15803d; font-weight: 700; } .card .no { color: var(--veto); font-weight: 800; }
+  .stamp { position: absolute; right: 8px; bottom: 4px; transform: rotate(-12deg) scale(2); opacity: 0; color: var(--veto); border: 3px solid var(--veto); border-radius: 6px; padding: 2px 8px; font-weight: 900; font-size: 18px; letter-spacing: .08em; transition: all .25s cubic-bezier(.2, 1.6, .4, 1); background: rgba(255,255,255,.85); }
+  .card.vetoed .stamp { opacity: 1; transform: rotate(-12deg) scale(1); }
+
+  #results { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .3s; }
+  #results.show { opacity: 1; pointer-events: auto; }
+  #results .panel { background: var(--card); border-radius: 16px; padding: 22px 26px; box-shadow: 0 20px 60px rgba(0,0,0,.25); max-width: calc(100% - 32px); overflow-x: auto; }
+  #results h3 { margin: 0 0 12px; font-size: 18px; }
+  #results table { border-collapse: collapse; font-size: 14px; }
+  #results th, #results td { padding: 7px 12px; text-align: left; border-bottom: 1px solid #f1f3f7; white-space: nowrap; }
+  #results th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  #results td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  #results .sum { margin-top: 14px; font-weight: 700; }
+  #results .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes blink { 50% { opacity: .35; } }
+  @keyframes ring { from { transform: scale(.7); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
+
+  @media (max-width: 900px) {
+    body { overflow: auto; }
+    main { grid-template-columns: 1fr; height: auto; }
+    #stage { height: 62vh; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+    .legend { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Flight Recorder</h1>
+  <span id="pill" class="pill"><span class="dot"></span><span id="pilltext">WAITING</span></span>
+  <span id="meta" class="meta"></span>
+  <div class="legend">
+    <span><i style="background:var(--run)"></i>worker agent</span>
+    <span><i style="background:#1f2937"></i>supervisor</span>
+    <span><i style="background:var(--flag)"></i>caught</span>
+    <button id="resbtn" hidden>Results (R)</button>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <svg id="city" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent city"></svg>
+    <div id="banner"></div>
+    <div id="card" class="card"></div>
+  </div>
+  <aside>
+    <h2>Agents</h2>
+    <div id="agents"></div>
+    <h2 style="margin-top:16px">Supervisor log</h2>
+    <div id="log" class="log"></div>
+  </aside>
+</main>
+<div id="results"><div class="panel"></div></div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const BUILDINGS = [
+  { id: "library",  x: 170,  label: "Library",  tools: "search",            icon: "📚", color: "#8b5cf6" },
+  { id: "archive",  x: 385,  label: "Archive",  tools: "read_file · list_dir", icon: "🗄️", color: "#64748b" },
+  { id: "workshop", x: 600,  label: "Workshop", tools: "edit · patch",      icon: "🔧", color: "#f97316" },
+  { id: "lab",      x: 815,  label: "Test Lab", tools: "run_tests · lint",  icon: "🧪", color: "#06b6d4" },
+  { id: "network",  x: 1030, label: "Network",  tools: "fetch · call_api",  icon: "📡", color: "#ec4899" },
+];
+const ACTION_TO_BUILDING = { search: "library", read_file: "archive", list_dir: "archive", edit: "workshop",
+  patch: "workshop", run_tests: "lab", lint: "lab", fetch: "network", call_api: "network" };
+const BASE_Y = 280;                       // building bottom edge
+const AVENUE_Y = 410;
+const TOWER = { x: 600, y: 630 };         // tower base
+const DRONE_HOME = { x: 600, y: 452 };
+const STATION_Y = 560;
+const PAD_Y = 742;
+const padX = i => 120 + (i - 1) * 160;
+const homePos = i => ({ x: padX(i), y: PAD_Y - 30 });
+const slotPos = (b, i) => ({ x: b.x + (i - 4) * 28, y: BASE_Y + 52 + (i % 2 ? 0 : 26) });
+const STATUS_COLOR = { running: "var(--run)", recovering: "var(--recover)", recovered: "var(--ok)",
+  success_untouched: "var(--ok)", stopped: "var(--stop)", flagged: "var(--flag)" };
+const STATUS_LABEL = { running: "running", recovering: "recovering", recovered: "recovered",
+  success_untouched: "done · untouched", stopped: "stopped", flagged: "caught" };
+
+const svg = document.getElementById("city");
+const stage = document.getElementById("stage");
+const el = (tag, attrs = {}, parent) => {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const short = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- static scene ----------
+const defs = el("defs", {}, svg);
+const pat = el("pattern", { id: "dots", width: 24, height: 24, patternUnits: "userSpaceOnUse" }, defs);
+el("circle", { cx: 2, cy: 2, r: 1.2, fill: "#e3e7ee" }, pat);
+el("rect", { width: 1200, height: 800, fill: "url(#dots)" }, svg);
+
+const roads = el("g", {}, svg);
+el("path", { class: "road", d: `M70 ${AVENUE_Y} H1130` }, roads);
+for (const b of BUILDINGS) el("path", { class: "road", d: `M${b.x} ${BASE_Y} V${AVENUE_Y}` }, roads);
+for (let i = 1; i <= 7; i++) el("path", { class: "road", d: `M${padX(i)} ${AVENUE_Y} V${PAD_Y}` }, roads);
+
+for (const b of BUILDINGS) {
+  const g = el("g", { transform: `translate(${b.x},${BASE_Y})` }, svg);
+  el("rect", { class: "bld", x: -66, y: -150, width: 132, height: 150, rx: 14 }, g);
+  el("path", { d: "M-66 -136 a14 14 0 0 1 14 -14 h104 a14 14 0 0 1 14 14 v6 h-132 z", fill: b.color }, g);
+  el("text", { class: "blabel", y: -108 }, g).textContent = b.label;
+  el("text", { y: -56, "text-anchor": "middle", "font-size": 40 }, g).textContent = b.icon;
+  el("rect", { x: -16, y: -34, width: 32, height: 34, rx: 5, fill: "#f1f3f7", stroke: "#e3e7ee" }, g);
+  el("text", { class: "btools", y: 16 }, g).textContent = b.tools;
+}
+
+// control tower + LLM / policy stations
+const tower = el("g", { transform: `translate(${TOWER.x},${TOWER.y})` }, svg);
+el("rect", { class: "tower-body", x: -26, y: -120, width: 52, height: 120, rx: 6 }, tower);
+el("rect", { class: "tower-body", x: -48, y: -160, width: 96, height: 44, rx: 12 }, tower);
+el("rect", { x: -38, y: -150, width: 76, height: 22, rx: 6, fill: "#7dd3fc", opacity: .85 }, tower);
+el("circle", { class: "beacon", cy: -170, r: 6 }, tower);
+el("text", { y: -135, "text-anchor": "middle", "font-size": 10, "font-weight": 800, "letter-spacing": ".1em", fill: "#0c4a6e" }, tower).textContent = "SUPERVISOR";
+
+function station(id, x, icon, label, sub) {
+  const g = el("g", { class: "station", id, transform: `translate(${x},${STATION_Y})` }, svg);
+  el("circle", { r: 30 }, g);
+  el("text", { y: 9, "font-size": 26 }, g).textContent = icon;
+  el("text", { y: 50, "font-size": 12, "font-weight": 700, fill: "#1f2937" }, g).textContent = label;
+  el("text", { y: 65, "font-size": 10, fill: "#6b7280" }, g).textContent = sub;
+  return g;
+}
+const brain = station("brain", 440, "🧠", "Diagnose", "local LLM · Qwen 3.5");
+const shield = station("shield", 760, "🛡️", "Policy", "whitelist + veto");
+el("path", { d: `M470 ${STATION_Y} H574 M626 ${STATION_Y} H730`, stroke: "#d7dce5", "stroke-width": 2, "stroke-dasharray": "4 4" }, svg);
+
+for (let i = 1; i <= 7; i++) {
+  const g = el("g", { transform: `translate(${padX(i)},${PAD_Y})` }, svg);
+  el("rect", { class: "pad", x: -62, y: -10, width: 124, height: 46, rx: 12 }, g);
+  el("text", { class: "padnum", y: 8, id: `padnum${i}` }, g).textContent = `#${i}`;
+  el("text", { class: "padlabel", y: 25, id: `padlabel${i}` }, g).textContent = "";
+}
+
+const beam = el("polygon", { class: "beam", points: "0,0 0,0 0,0" }, svg);
+const effects = el("g", {}, svg);
+const botsLayer = el("g", { class: "bots" }, svg);
+const bubblesLayer = el("g", { class: "bubbles" }, svg);
+
+// supervisor drone (distinct from worker bots: dark, rotors, visor)
+const drone = el("g", { class: "drone mover" }, svg);
+const droneInner = el("g", { class: "bob" }, drone);
+for (const dx of [-24, 24]) {
+  el("line", { x1: dx * .4, y1: -6, x2: dx, y2: -12, stroke: "#1f2937", "stroke-width": 3, "stroke-linecap": "round" }, droneInner);
+  const r = el("g", { class: "rotor" }, droneInner);
+  el("ellipse", { cx: dx, cy: -13, rx: 15, ry: 3, fill: "#94a3b8" }, r);
+}
+el("ellipse", { rx: 24, ry: 13, fill: "#1f2937" }, droneInner);
+el("rect", { x: -14, y: -5, width: 28, height: 8, rx: 4, fill: "#38bdf8" }, droneInner);
+el("circle", { cy: 13, r: 3, fill: "#38bdf8" }, droneInner);
+function moveDrone(p) { drone.style.transform = `translate(${p.x}px, ${p.y}px)`; }
+moveDrone(DRONE_HOME);
+
+// ---------- worker bots ----------
+const bots = {};   // index -> {g, bubble, pos}
+function makeBot(i) {
+  const g = el("g", { class: "bot mover st-running" }, botsLayer);
+  const inner = el("g", { class: "bob" }, g);
+  inner.style.animationDelay = `${-i * .23}s`;
+  el("ellipse", { cy: 20, rx: 13, ry: 3.5, fill: "rgba(15,23,42,.12)" }, g);
+  el("line", { x1: 0, y1: -26, x2: 0, y2: -33, stroke: "#94a3b8", "stroke-width": 2 }, inner);
+  el("circle", { cy: -35, r: 3, fill: "var(--c)" }, inner);
+  el("rect", { class: "head", x: -11, y: -26, width: 22, height: 17, rx: 6 }, inner);
+  el("circle", { cx: -4.5, cy: -17.5, r: 2.2, fill: "#111827" }, inner);
+  el("circle", { cx: 4.5, cy: -17.5, r: 2.2, fill: "#111827" }, inner);
+  el("rect", { class: "body", x: -13, y: -7, width: 26, height: 24, rx: 8 }, inner);
+  el("text", { class: "num", y: 9 }, inner).textContent = i;
+  const badge = el("text", { x: 17, y: -18, "font-size": 15 }, inner);
+  const bubble = el("g", { class: "mover" }, bubblesLayer);
+  bots[i] = { g, badge, bubble, pos: homePos(i) };
+  place(i, homePos(i), true);
+}
+function place(i, p, instant) {
+  const b = bots[i];
+  for (const n of [b.g, b.bubble]) {
+    if (instant) n.style.transition = "none";
+    n.style.transform = `translate(${p.x}px, ${p.y}px)`;
+    if (instant) { n.getBoundingClientRect(); n.style.transition = ""; }
+  }
+  b.pos = p;
+}
+
+function targetFor(a) {
+  if (!a.action || ["stopped", "recovered", "success_untouched"].includes(a.status)) return homePos(a.index);
+  const b = BUILDINGS.find(b => b.id === (ACTION_TO_BUILDING[a.action] || "archive"));
+  return slotPos(b, a.index);
+}
+
+function bubbleFor(a) {
+  if (a.status === "stopped") return { text: "🛑 stopped", cls: "stop" };
+  if (a.status === "recovered") return { text: "recovered ✓", cls: "ok" };
+  if (a.status === "success_untouched") return { text: "done ✓ untouched", cls: "ok" };
+  if (a.claimed && !a.passed) return { text: `“${a.claimed}”`, cls: "claim", evidence: "evidence: tests FAILED ✗" };
+  if (!a.action) return null;
+  const r = a.result || "";
+  if (/timeout/i.test(r)) return { text: "⏳ timeout", cls: "err" };
+  if (/429/.test(r)) return { text: "🚦 429 rate limited", cls: "err" };
+  if (/failed|not found|failing/i.test(r)) return { text: short(r, 22), cls: "err" };
+  return { text: short(`${a.action}`, 18), cls: "" };
+}
+
+function drawBubble(i, spec) {
+  const g = bots[i].bubble;
+  g.replaceChildren();
+  if (!spec) return;
+  const y = -58;
+  const bg = el("g", { class: `bubble ${spec.cls}` }, g);
+  const rect = el("rect", { y: y - 15, height: 22, rx: 8 }, bg);
+  const t = el("text", { y: y }, bg);
+  t.textContent = spec.text;
+  const w = t.getComputedTextLength() + 16;
+  rect.setAttribute("x", -w / 2); rect.setAttribute("width", w);
+  if (spec.evidence) {
+    const ev = el("g", { class: "evidence" }, g);
+    const er = el("rect", { y: y - 41, height: 20, rx: 6 }, ev);
+    const et = el("text", { y: y - 27 }, ev);
+    et.textContent = spec.evidence;
+    const ew = et.getComputedTextLength() + 14;
+    er.setAttribute("x", -ew / 2); er.setAttribute("width", ew);
+  }
+}
+
+const BADGE = { stopped: "", recovered: "✅", success_untouched: "⭐" };
+function renderBot(a) {
+  if (!bots[a.index]) makeBot(a.index);
+  const view = visiting.has(a.index) ? { ...a, status: "flagged" } : a;
+  const b = bots[a.index];
+  b.g.setAttribute("class", `bot mover st-${view.status}`);
+  b.badge.textContent = BADGE[view.status] || "";
+  drawBubble(a.index, bubbleFor(view));
+  place(a.index, targetFor(view));
+}
+
+// ---------- supervisor visits (one flag at a time) ----------
+const queue = [];
+const visiting = new Set();
+let busy = false;
+const card = document.getElementById("card");
+
+function toStage(x, y) {
+  const pt = svg.createSVGPoint(); pt.x = x; pt.y = y;
+  const s = pt.matrixTransform(svg.getScreenCTM());
+  const r = stage.getBoundingClientRect();
+  return { x: s.x - r.left, y: s.y - r.top };
+}
+
+async function runQueue() {
+  if (busy) return;
+  busy = true;
+  while (queue.length) {
+    while (document.body.classList.contains("offline")) await sleep(200);
+    const job = queue.shift();
+    // Keep up with real time when flags pile up; the liar's veto always gets full time.
+    await visit(job, job.ev.vetoed ? 1 : queue.length ? .6 : 1);
+  }
+  moveDrone(DRONE_HOME);
+  busy = false;
+}
+
+async function visit({ idx, name, ev }, f) {
+  const p = bots[idx].pos;
+  bubblesLayer.appendChild(bots[idx].bubble);  // flagged bot's bubble on top
+  const side = p.x > 1080 ? -1 : 1;
+  const d = { x: p.x + side * 62, y: p.y - 26 };
+  moveDrone(d);
+  await sleep(550 * f);
+  beam.setAttribute("points", `${d.x - 7},${d.y + 8} ${d.x + 7},${d.y + 8} ${p.x + 15},${p.y + 18} ${p.x - 15},${p.y - 26}`);
+  beam.classList.add("on");
+  const ring = el("circle", { class: "ring", cx: p.x, cy: p.y - 6, r: 30 }, effects);
+
+  const below = p.y < 500;
+  const s = toStage(p.x, below ? p.y + 34 : p.y - 110);
+  card.style.left = `${Math.max(8, Math.min(stage.clientWidth - 308, s.x - 150))}px`;
+  card.style.top = below ? `${s.y}px` : "";
+  card.style.bottom = below ? "" : `${stage.clientHeight - s.y}px`;
+  card.className = "card";
+  card.innerHTML = `
+    <div class="flag">⚠ ${esc(ev.flag.toUpperCase())} · #${idx} ${esc(name)} · step ${ev.step}</div>
+    <div class="detail">${esc(ev.detail)}</div>
+    <div class="row">🧠 LLM proposes <b>${esc(ev.proposed ?? "—")}</b></div>
+    <div class="row policy">🛡️ Policy: ${ev.vetoed
+      ? `<span class="no">VETO</span> → <b>${esc(ev.action)}</b>`
+      : `<span class="ok">✓ approved</span> → <b>${esc(ev.action)}</b>`}</div>
+    <div class="stamp">VETOED</div>`;
+  requestAnimationFrame(() => card.classList.add("show"));
+  brain.classList.add("on");
+  await sleep(550 * f);
+  brain.classList.remove("on");
+  shield.classList.add(ev.vetoed ? "veto" : "on");
+  card.classList.add("policy");
+  if (ev.vetoed) { await sleep(350 * f); card.classList.add("vetoed"); }
+  await sleep((ev.vetoed ? 2400 : 750) * f);
+
+  shield.classList.remove("on", "veto");
+  card.classList.remove("show");
+  beam.classList.remove("on");
+  ring.remove();
+  visiting.delete(idx);
+  if (latest[idx]) renderBot(latest[idx]);
+}
+
+// ---------- data ----------
+let snap = null, alive = false, wasOffline = false, prevEvents = {}, resultsShown = false;
+const latest = {};
+const banner = document.getElementById("banner");
+let bannerTimer = null;
+function showBanner(text, cls, ms) {
+  banner.textContent = text; banner.className = `show ${cls}`;
+  clearTimeout(bannerTimer);
+  if (ms) bannerTimer = setTimeout(() => (banner.className = cls), ms);
+}
+function hideBanner() { banner.className = ""; }
+
+function resetSession(s) {
+  queue.length = 0; visiting.clear(); prevEvents = {}; resultsShown = false;
+  document.getElementById("results").classList.remove("show");
+  document.getElementById("resbtn").hidden = true;
+  for (const a of s.agents) {
+    prevEvents[a.index] = a.events;
+    if (!bots[a.index]) makeBot(a.index);
+    place(a.index, targetFor(a), true);
+  }
+}
+
+function update(s) {
+  if (!snap || snap.session !== s.session) resetSession(s);
+  for (const a of s.agents) {
+    document.getElementById(`padlabel${a.index}`).textContent = a.name;
+    if (a.events > (prevEvents[a.index] ?? a.events) && a.last_event) {
+      visiting.add(a.index);
+      queue.push({ idx: a.index, name: a.name, ev: a.last_event });
+    }
+    prevEvents[a.index] = a.events;
+    latest[a.index] = a;
+    renderBot(a);
+  }
+  snap = s;
+  renderSide(s);
+  evaluateMode();
+  runQueue();
+  if (s.finished && !resultsShown) { resultsShown = true; showResultsWhenIdle(); }
+}
+
+function renderSide(s) {
+  document.getElementById("meta").textContent =
+    `session ${s.session}` + (s.faked.length ? ` · fakes: ${[...new Set(s.faked.map(f => f.split(".")[0]))].join(", ")}` : "");
+  document.getElementById("agents").innerHTML = s.agents.map(a => `
+    <div class="agent">
+      <span class="sw" style="background:${STATUS_COLOR[a.status]}"></span>
+      <span class="nm">#${a.index} ${esc(a.name)}</span>
+      <span class="st" style="color:${STATUS_COLOR[a.status]}">${STATUS_LABEL[a.status]}</span>
+      <span class="act">step ${a.step} · ${a.action ? esc(a.action + ": " + a.result) : "waiting"}</span>
+    </div>`).join("");
+  document.getElementById("log").innerHTML =
+    s.pinned.map(m => `<div class="pin">${esc(m)}</div>`).join("") +
+    s.log.slice().reverse().map(m => `<div>${esc(m)}</div>`).join("");
+}
+
+function evaluateMode() {
+  const pill = document.getElementById("pill"), txt = document.getElementById("pilltext");
+  let mode = !snap ? "waiting" : snap.finished ? "complete" : alive ? "live" : "offline";
+  pill.className = `pill ${mode}`;
+  txt.textContent = { waiting: "WAITING", live: "LIVE", offline: "SUPERVISOR DOWN", complete: "RUN COMPLETE" }[mode];
+  document.body.classList.toggle("offline", mode === "offline");
+  if (mode === "waiting") showBanner("Waiting for supervisor… run python3 run_demo.py --viewer", "wait");
+  else if (mode === "offline") {
+    if (!wasOffline) {
+      showBanner("⚠ SUPERVISOR KILLED — agents frozen at last checkpoint", "down");
+      moveDrone(DRONE_HOME);
+      card.classList.remove("show");
+      beam.classList.remove("on");
+    }
+    wasOffline = true;
+  } else if (wasOffline && alive && snap.resumed_at != null) {
+    wasOffline = false;
+    showBanner(`↻ SUPERVISOR RESUMED from checkpoint · step ${snap.resumed_at}`, "up", 5000);
+  } else if (mode === "live" || mode === "complete") {
+    if (wasOffline) { wasOffline = false; }
+    if (banner.classList.contains("wait") || banner.classList.contains("down")) hideBanner();
+  }
+}
+
+async function showResultsWhenIdle() {
+  const session = snap.session;
+  while (busy || queue.length) await sleep(300);
+  await sleep(1200);
+  if (snap.session !== session || !snap.finished) return;
+  renderResults(); document.getElementById("results").classList.add("show");
+  document.getElementById("resbtn").hidden = false;
+}
+function renderResults() {
+  if (!snap?.results) return;
+  document.querySelector("#results .panel").innerHTML = `
+    <h3>Results</h3>
+    <table><tr><th>Agent</th><th>Expected</th><th>Actual</th><th></th><th>Steps to detect</th><th>Interventions</th><th>Vetoes</th><th>Wasted calls saved</th></tr>
+    ${snap.results.map(r => `<tr><td>${esc(r.agent)}</td><td>${r.expected}</td><td>${r.actual}</td><td>${r.ok ? "✅" : "❌"}</td>
+      <td class="n">${r.detect ?? "—"}</td><td class="n">${r.interventions}</td><td class="n">${r.vetoes}</td><td class="n">${r.saved}</td></tr>`).join("")}
+    </table>
+    <div class="sum">${esc(snap.summary)}</div>
+    <div class="hint">Click anywhere or press R to toggle</div>`;
+}
+document.getElementById("results").addEventListener("click", () => document.getElementById("results").classList.remove("show"));
+document.getElementById("resbtn").addEventListener("click", () => { renderResults(); document.getElementById("results").classList.add("show"); });
+addEventListener("keydown", e => { if (e.key === "r" || e.key === "R") { renderResults(); document.getElementById("results").classList.toggle("show"); } });
+
+async function poll() {
+  try {
+    const r = await fetch(`live.json?t=${Date.now()}`, { cache: "no-store" });
+    if (r.ok) update(await r.json());
+  } catch (e) { /* not written yet */ }
+  setTimeout(poll, 300);
+}
+async function heartbeat() {
+  let ok = false;
+  try {
+    const r = await fetch(`heartbeat.json?t=${Date.now()}`, { cache: "no-store" });
+    if (r.ok) ok = Date.now() / 1000 - (await r.json()).ts < 2;
+  } catch (e) { /* missing */ }
+  alive = ok;
+  evaluateMode();
+  setTimeout(heartbeat, 500);
+}
+for (let i = 1; i <= 7; i++) makeBot(i);
+evaluateMode();
+poll(); heartbeat();
+</script>
+</body>
+</html>

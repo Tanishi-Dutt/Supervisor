@@ -5,3 +5,6 @@ reports/
 .session
 .fake_store.json
 .fake_store.tmp
+viewer/live.json
+viewer/heartbeat.json
+viewer/*.tmp
