@@ -58,9 +58,13 @@ def new_record(agent) -> dict:
 
 
 class Demo:
-    def __init__(self, fns, session):
+    def __init__(self, fns, session, real=None):
         self.fns = fns
         self.agents = make_all(session)
+        if real:
+            from real_agent import RealCoder
+            brain = None if real == "auto" else real
+            self.agents.append(RealCoder(session, len(self.agents) + 1, brain=brain))
         self.recs, self.log, self.pinned = {}, [], []
         self.resumed_at = None  # highest checkpointed step, if this run is a resume
         for a in self.agents:
@@ -180,11 +184,13 @@ class Demo:
         rows, loops, false_stops = [], 0, 0
         for a in self.agents:
             meta = self.recs[a.run_id]["meta"]
-            false_stops += meta["outcome"] == "stopped" and a.EXPECTED_OUTCOME != "stopped"
+            # "any": a real LLM agent may legitimately recover, finish alone, or be stopped
+            false_stops += (meta["outcome"] == "stopped"
+                            and a.EXPECTED_OUTCOME not in ("stopped", "any"))
             false_stops += a.EXPECTED_OUTCOME == "success_untouched" and meta["interventions"] > 0
             loops += any(e["flag"]["kind"] in ("loop", "flipflop") for e in meta["events"])
             rows.append({"agent": a.name, "expected": a.EXPECTED_OUTCOME, "actual": meta["outcome"],
-                         "ok": meta["outcome"] == a.EXPECTED_OUTCOME,
+                         "ok": a.EXPECTED_OUTCOME in (meta["outcome"], "any"),
                          "detect": meta["first_flag_step"], "interventions": meta["interventions"],
                          "vetoes": meta["vetoes"],
                          "saved": UNSUPERVISED_CAP - a.state["step"] if a.LOOPS_FOREVER else 0})
@@ -246,6 +252,9 @@ def main():
                     help="on-stage pacing (1s/tick) and hold the results table until Enter")
     ap.add_argument("--viewer", action="store_true", help="serve and open the browser city view")
     ap.add_argument("--port", type=int, default=8765, help="port for --viewer")
+    ap.add_argument("--real", nargs="?", const="auto", choices=["auto", "scripted"],
+                    help="add agent #8: real files + real pytest; brain is Qwen if installed "
+                         "(auto) or a scripted brain that gets stuck until supervised")
     args = ap.parse_args()
     if args.stage:
         args.speed = 1.0
@@ -259,7 +268,10 @@ def main():
     if faked:
         console.print(f"[dim]using fakes for: {', '.join(faked)}[/]")
 
-    demo = Demo(fns, session)
+    demo = Demo(fns, session, real=args.real)
+    if args.real:
+        console.print(f"[bold]Agent #8 brain:[/] {demo.agents[-1].state['brain']} · "
+                      f"sandbox {demo.agents[-1].sandbox}")
     publish = lambda: viewer_feed.write_json("live.json", demo.snapshot(faked))
     viewer_feed.start_heartbeat()
     publish()

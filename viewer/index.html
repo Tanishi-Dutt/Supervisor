@@ -169,9 +169,11 @@ const TOWER = { x: 600, y: 630 };         // tower base
 const DRONE_HOME = { x: 600, y: 452 };
 const STATION_Y = 560;
 const PAD_Y = 742;
-const padX = i => 120 + (i - 1) * 160;
+let N = 7;  // agent count; 8 with --real
+const padX = i => 120 + (i - 1) * 960 / (N - 1);
 const homePos = i => ({ x: padX(i), y: PAD_Y - 30 });
-const slotPos = (b, i) => ({ x: b.x + (i - 4) * 28, y: BASE_Y + 52 + (i % 2 ? 0 : 26) });
+const slotPos = (b, i) => ({ x: b.x + (i - (N + 1) / 2) * Math.min(28, 168 / (N - 1)),
+                             y: BASE_Y + 52 + (i % 2 ? 0 : 26) });
 const STATUS_COLOR = { running: "var(--run)", recovering: "var(--recover)", recovered: "var(--ok)",
   success_untouched: "var(--ok)", stopped: "var(--stop)", flagged: "var(--flag)" };
 const STATUS_LABEL = { running: "running", recovering: "recovering", recovered: "recovered",
@@ -198,7 +200,7 @@ el("rect", { width: 1200, height: 800, fill: "url(#dots)" }, svg);
 const roads = el("g", {}, svg);
 el("path", { class: "road", d: `M70 ${AVENUE_Y} H1130` }, roads);
 for (const b of BUILDINGS) el("path", { class: "road", d: `M${b.x} ${BASE_Y} V${AVENUE_Y}` }, roads);
-for (let i = 1; i <= 7; i++) el("path", { class: "road", d: `M${padX(i)} ${AVENUE_Y} V${PAD_Y}` }, roads);
+const padRoads = el("g", {}, roads);
 
 for (const b of BUILDINGS) {
   const g = el("g", { transform: `translate(${b.x},${BASE_Y})` }, svg);
@@ -230,11 +232,22 @@ const brain = station("brain", 440, "🧠", "Diagnose", "local LLM · Qwen 3.5")
 const shield = station("shield", 760, "🛡️", "Policy", "whitelist + veto");
 el("path", { d: `M470 ${STATION_Y} H574 M626 ${STATION_Y} H730`, stroke: "#d7dce5", "stroke-width": 2, "stroke-dasharray": "4 4" }, svg);
 
-for (let i = 1; i <= 7; i++) {
-  const g = el("g", { transform: `translate(${padX(i)},${PAD_Y})` }, svg);
-  el("rect", { class: "pad", x: -62, y: -10, width: 124, height: 46, rx: 12 }, g);
-  el("text", { class: "padnum", y: 8, id: `padnum${i}` }, g).textContent = `#${i}`;
-  el("text", { class: "padlabel", y: 25, id: `padlabel${i}` }, g).textContent = "";
+const padsLayer = el("g", {}, svg);
+function layoutPads(n) {
+  N = n;
+  padRoads.replaceChildren(); padsLayer.replaceChildren();
+  const w = Math.min(124, 960 / (N - 1) - 12);
+  for (let i = 1; i <= N; i++) {
+    el("path", { class: "road", d: `M${padX(i)} ${AVENUE_Y} V${PAD_Y}` }, padRoads);
+    const g = el("g", { transform: `translate(${padX(i)},${PAD_Y})` }, padsLayer);
+    el("rect", { class: "pad", x: -w / 2, y: -10, width: w, height: 46, rx: 12 }, g);
+    el("text", { class: "padnum", y: 8, id: `padnum${i}` }, g).textContent = `#${i}`;
+    el("text", { class: "padlabel", y: 25, id: `padlabel${i}` }, g).textContent = "";
+  }
+  for (const i of Object.keys(bots).map(Number)) {
+    if (i > N) { bots[i].g.remove(); bots[i].bubble.remove(); delete bots[i]; }
+  }
+  for (let i = 1; i <= N; i++) if (!bots[i]) makeBot(i);
 }
 
 const beam = el("polygon", { class: "beam", points: "0,0 0,0 0,0" }, svg);
@@ -417,6 +430,7 @@ function showBanner(text, cls, ms) {
 function hideBanner() { banner.className = ""; }
 
 function resetSession(s) {
+  if (s.agents.length !== N) layoutPads(s.agents.length);
   queue.length = 0; visiting.clear(); prevEvents = {}; resultsShown = false;
   document.getElementById("results").classList.remove("show");
   document.getElementById("resbtn").hidden = true;
@@ -431,6 +445,7 @@ function update(s) {
   if (!snap || snap.session !== s.session) resetSession(s);
   for (const a of s.agents) {
     document.getElementById(`padlabel${a.index}`).textContent = a.name;
+    if (a.name === "Real coder") document.getElementById(`padnum${a.index}`).textContent = `#${a.index} · real files + pytest`;
     if (a.events > (prevEvents[a.index] ?? a.events) && a.last_event) {
       visiting.add(a.index);
       queue.push({ idx: a.index, name: a.name, ev: a.last_event });
@@ -525,7 +540,7 @@ async function heartbeat() {
   evaluateMode();
   setTimeout(heartbeat, 500);
 }
-for (let i = 1; i <= 7; i++) makeBot(i);
+layoutPads(7);
 evaluateMode();
 poll(); heartbeat();
 </script>

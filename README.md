@@ -60,3 +60,35 @@ The agents are scripted simulations (no real tools, no sandbox): every run behav
 - Heartbeat older than 2s means **SUPERVISOR KILLED**: bots freeze and turn grey. On restart the page shows
   **RESUMED from checkpoint**.
 - Results pop up when the run ends; press R to toggle.
+
+## Real agent (`--real`)
+
+`python3 run_demo.py --fresh --real` adds agent #8, **Real coder**: it edits real files in a sandbox
+(`$TMPDIR/flight_recorder_sandbox/<run_id>/`) to fix a genuinely failing `pytest`, and its evidence
+is a real pytest run recomputed by the harness every step, never taken from the agent's word.
+
+- `--real` (auto): Qwen drives it when a Qwen model is installed in Ollama (any tag, e.g. `qwen3.5:latest`).
+  In testing it fixed the bug in 5 steps with no intervention, which shows the supervisor doesn't stop healthy real agents.
+- `--real scripted`: same real tools, but a brain that re-runs the tests until the supervisor says
+  `change_strategy`, then reads both files, fixes the bug and passes, which reliably shows supervision of a real-tools agent.
+
+Tip: set `OLLAMA_MODEL` to the tag you actually have (`ollama list`) so diagnosis uses the LLM too.
+
+## Use it on your own agent
+
+```python
+from flight_recorder import FlightRecorder
+
+with FlightRecorder("checkout-bot-42") as fr:
+    while not agent.finished:
+        action, args = agent.decide()
+        result = agent.run(action, args)
+        verdict = fr.step(action, args, result, claimed=agent.status, test_passed=run_my_tests())
+        if verdict == "stop":
+            break
+        if verdict != "continue":
+            agent.recover(verdict)  # retry_with_backoff | change_strategy | rollback
+```
+
+Same watchdog, LLM diagnosis, policy veto, SQLite checkpoints and incident report as the demo;
+reopening the same `run_id` after a crash resumes it. See `tests/test_flight_recorder.py`.
