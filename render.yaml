@@ -1,0 +1,12 @@
+# Backend for the live demo site: runs the real supervisor per visitor (server/app.py).
+services:
+  - type: web
+    name: flight-recorder-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt -r requirements-server.txt
+    startCommand: uvicorn server.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7

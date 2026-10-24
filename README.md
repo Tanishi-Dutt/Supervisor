@@ -92,3 +92,33 @@ with FlightRecorder("checkout-bot-42") as fr:
 
 Same watchdog, LLM diagnosis, policy veto, SQLite checkpoints and incident report as the demo;
 reopening the same `run_id` after a crash resumes it. See `tests/test_flight_recorder.py`.
+
+## Website (live demo)
+
+`site/index.html` is the landing page; `city.html` is the city view in website mode with
+**▶ Start run · ☠ Kill supervisor · ↻ Resume** buttons and click-a-robot incident reports.
+Every visitor run is a real `run_demo.py` process on the backend (`server/app.py`): Kill sends it
+a real SIGKILL and Resume relaunches it from its SQLite checkpoint.
+
+```
+frontend (Vercel, static)  ──/api/*──▶  backend (Render, FastAPI: server/app.py)
+```
+
+Free hosting has no GPU, so the hosted demo uses the rule-based diagnosis and the scripted brain for
+the real coder; the landing page says so.
+
+**Run it locally**
+```
+pip install -r requirements.txt -r requirements-server.txt
+uvicorn server.app:app --port 8000
+FR_API=http://127.0.0.1:8000 sh scripts/build_site.sh && (cd public && python3 -m http.server 8767)
+# open http://127.0.0.1:8767
+```
+
+**Deploy (one-time, needs a team member's accounts)**
+1. Render → New → Blueprint → pick this repo (uses `render.yaml`). Note the service URL; if
+   `flight-recorder-api` was taken, update the URL in `vercel.json`.
+2. Vercel → Add New Project → import this repo → deploy (uses `vercel.json`; `/api/*` is proxied to Render).
+3. Before judging, open `https://<render-service>.onrender.com/api/health` once: the free tier sleeps after ~15 min.
+
+Limits: 3 simultaneous runs, each killed after 3 min, run folders deleted after 30 min.

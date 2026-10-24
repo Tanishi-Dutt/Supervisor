@@ -15,10 +15,12 @@ import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-VIEWER_DIR = ROOT / "viewer"
+# The web backend points each visitor's run at its own folder.
+VIEWER_DIR = Path(os.environ.get("FR_LIVE_DIR", ROOT / "viewer"))
 
 
 def write_json(name: str, data: dict) -> None:
+    VIEWER_DIR.mkdir(parents=True, exist_ok=True)
     path = VIEWER_DIR / name
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data))

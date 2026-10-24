@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flight Recorder City</title>
 <link rel="icon" href="data:,">
+<!--FR_CONFIG-->
 <style>
   :root {
     --bg: #fafbfc; --ink: #1f2937; --muted: #6b7280; --line: #e3e7ee; --card: #ffffff;
@@ -22,7 +23,28 @@
   .pill.live { background: #dcfce7; color: #15803d; } .pill.live .dot { animation: blink 1.2s infinite; }
   .pill.offline { background: #fee2e2; color: var(--veto); }
   .pill.complete { background: #dbeafe; color: #1d4ed8; }
-  .meta { color: var(--muted); font-size: 12px; }
+  .meta { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #controls { display: none; align-items: center; gap: 8px; flex-shrink: 0; }
+  body.api #controls { display: flex; }
+  body.api .legend > span { display: none; }
+  #controls button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  #controls button.go { background: #111827; color: #fff; border-color: #111827; }
+  #controls button.kill { color: var(--veto); border-color: #fca5a5; }
+  #controls button:disabled { opacity: .35; cursor: default; }
+  #controls label { font-size: 12px; color: var(--muted); display: flex; gap: 5px; align-items: center; white-space: nowrap; }
+  #status { font-size: 12px; color: var(--muted); max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.api .bot, body.api .agent { cursor: pointer; }
+  #drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(580px, 100%); background: var(--card); border-left: 1px solid var(--line); box-shadow: -12px 0 40px rgba(15,23,42,.14); transform: translateX(105%); transition: transform .3s; overflow-y: auto; padding: 18px 24px 40px; z-index: 5; }
+  #drawer.show { transform: none; }
+  #drawer .close { float: right; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .md h1 { font-size: 19px; margin: 4px 0 10px; } .md h2 { font-size: 15px; margin: 20px 0 8px; } .md h3 { font-size: 13px; }
+  .md p, .md li { font-size: 13px; } .md ul { padding-left: 18px; }
+  .md table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 6px 0; }
+  .md th, .md td { border-bottom: 1px solid #f1f3f7; padding: 5px 6px; text-align: left; vertical-align: top; }
+  .md th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .md code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+  .md pre { font-size: 12px; white-space: pre-wrap; }
   .legend { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-size: 12px; align-items: center; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
   header button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer; }
@@ -130,6 +152,13 @@
   <h1>Agent Flight Recorder</h1>
   <span id="pill" class="pill"><span class="dot"></span><span id="pilltext">WAITING</span></span>
   <span id="meta" class="meta"></span>
+  <div id="controls">
+    <button id="startbtn" class="go">▶ Start run</button>
+    <label><input type="checkbox" id="realchk"> + real coder agent</label>
+    <button id="killbtn" class="kill" disabled title="Sends SIGKILL to the supervisor process">☠ Kill supervisor</button>
+    <button id="resumebtn" disabled>↻ Resume</button>
+    <span id="status"></span>
+  </div>
   <div class="legend">
     <span><i style="background:var(--run)"></i>worker agent</span>
     <span><i style="background:#1f2937"></i>supervisor</span>
@@ -151,9 +180,12 @@
   </aside>
 </main>
 <div id="results"><div class="panel"></div></div>
+<div id="drawer"><button class="close" id="drawerclose">✕ Close</button><div id="drawerbody" class="md"></div></div>
 
 <script>
 const NS = "http://www.w3.org/2000/svg";
+const API = typeof window.FR_API === "string" ? window.FR_API.replace(/\/$/, "") : null;  // set by the website's config.js
+let runId = API === null ? null : new URLSearchParams(location.search).get("run");
 const BUILDINGS = [
   { id: "library",  x: 170,  label: "Library",  tools: "search",            icon: "📚", color: "#8b5cf6" },
   { id: "archive",  x: 385,  label: "Archive",  tools: "read_file · list_dir", icon: "🗄️", color: "#64748b" },
@@ -285,6 +317,7 @@ function makeBot(i) {
   el("text", { class: "num", y: 9 }, inner).textContent = i;
   const badge = el("text", { x: 17, y: -18, "font-size": 15 }, inner);
   const bubble = el("g", { class: "mover" }, bubblesLayer);
+  g.addEventListener("click", () => openReport(i));
   bots[i] = { g, badge, bubble, pos: homePos(i) };
   place(i, homePos(i), true);
 }
@@ -465,7 +498,7 @@ function renderSide(s) {
   document.getElementById("meta").textContent =
     `session ${s.session}` + (s.faked.length ? ` · fakes: ${[...new Set(s.faked.map(f => f.split(".")[0]))].join(", ")}` : "");
   document.getElementById("agents").innerHTML = s.agents.map(a => `
-    <div class="agent">
+    <div class="agent" onclick="openReport(${a.index})">
       <span class="sw" style="background:${STATUS_COLOR[a.status]}"></span>
       <span class="nm">#${a.index} ${esc(a.name)}</span>
       <span class="st" style="color:${STATUS_COLOR[a.status]}">${STATUS_LABEL[a.status]}</span>
@@ -482,7 +515,8 @@ function evaluateMode() {
   pill.className = `pill ${mode}`;
   txt.textContent = { waiting: "WAITING", live: "LIVE", offline: "SUPERVISOR DOWN", complete: "RUN COMPLETE" }[mode];
   document.body.classList.toggle("offline", mode === "offline");
-  if (mode === "waiting") showBanner("Waiting for supervisor… run python3 run_demo.py --viewer", "wait");
+  if (mode === "waiting") showBanner(API === null ? "Waiting for supervisor… run python3 run_demo.py --viewer"
+    : runId ? "Starting the supervisor…" : "Press ▶ Start run to launch the supervisor and its agents", "wait");
   else if (mode === "offline") {
     if (!wasOffline) {
       showBanner("⚠ SUPERVISOR KILLED — agents frozen at last checkpoint", "down");
@@ -513,11 +547,11 @@ function renderResults() {
   document.querySelector("#results .panel").innerHTML = `
     <h3>Results</h3>
     <table><tr><th>Agent</th><th>Expected</th><th>Actual</th><th></th><th>Steps to detect</th><th>Interventions</th><th>Vetoes</th><th>Wasted calls saved</th></tr>
-    ${snap.results.map(r => `<tr><td>${esc(r.agent)}</td><td>${r.expected}</td><td>${r.actual}</td><td>${r.ok ? "✅" : "❌"}</td>
+    ${snap.results.map((r, k) => `<tr onclick="openReport(${k + 1})" style="cursor:pointer"><td>${esc(r.agent)}</td><td>${r.expected}</td><td>${r.actual}</td><td>${r.ok ? "✅" : "❌"}</td>
       <td class="n">${r.detect ?? "—"}</td><td class="n">${r.interventions}</td><td class="n">${r.vetoes}</td><td class="n">${r.saved}</td></tr>`).join("")}
     </table>
     <div class="sum">${esc(snap.summary)}</div>
-    <div class="hint">Click anywhere or press R to toggle</div>`;
+    <div class="hint">${API === null ? "" : "Click an agent for its black-box report · "}Click anywhere or press R to toggle</div>`;
 }
 document.getElementById("results").addEventListener("click", () => document.getElementById("results").classList.remove("show"));
 document.getElementById("resbtn").addEventListener("click", () => { renderResults(); document.getElementById("results").classList.add("show"); });
@@ -540,9 +574,110 @@ async function heartbeat() {
   evaluateMode();
   setTimeout(heartbeat, 500);
 }
+// ---------- website mode: talk to server/app.py ----------
+let procAlive = false, starting = false;
+const $ = id => document.getElementById(id);
+const setStatus = t => { $("status").textContent = t; $("status").title = t; };
+
+async function api(path, method = "POST", body) {
+  const r = await fetch(`${API}${path}`, { method, cache: "no-store",
+    headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || `server error ${r.status}`);
+  return d;
+}
+function setRun(id) {
+  runId = id;
+  const url = new URL(location.href);
+  id ? url.searchParams.set("run", id) : url.searchParams.delete("run");
+  history.replaceState(null, "", url);
+}
+function syncControls() {
+  const running = !!runId && procAlive;
+  $("startbtn").disabled = starting || running;
+  $("killbtn").disabled = !running || !snap || snap.finished;
+  $("resumebtn").disabled = !runId || running || !snap || snap.finished;
+}
+async function pollApi() {
+  if (runId) {
+    try {
+      const r = await fetch(`${API}/api/runs/${runId}`, { cache: "no-store" });
+      if (r.status === 404) { setRun(null); snap = null; procAlive = false; setStatus("That run expired. Start a new one."); }
+      else if (r.ok) {
+        const d = await r.json();
+        alive = d.alive; procAlive = d.process === "running";
+        if (d.snapshot) update(d.snapshot); else evaluateMode();
+      }
+    } catch (e) { setStatus("Can't reach the server (free hosting may be waking up), retrying…"); }
+  }
+  syncControls();
+  setTimeout(pollApi, 400);
+}
+$("startbtn").addEventListener("click", async () => {
+  starting = true; syncControls(); setStatus("Starting…");
+  try {
+    const d = await api("/api/runs", "POST", { real: $("realchk").checked });
+    snap = null; procAlive = true; alive = false; wasOffline = false;
+    $("results").classList.remove("show"); $("drawer").classList.remove("show");
+    setRun(d.id); evaluateMode();
+    setStatus("Running. Try killing the supervisor mid-run.");
+  } catch (e) { setStatus(e.message); }
+  starting = false; syncControls();
+});
+$("killbtn").addEventListener("click", async () => {
+  try { const d = await api(`/api/runs/${runId}/kill`); setStatus(`kill -9 sent to PID ${d.killed}: no warning, no cleanup.`); }
+  catch (e) { setStatus(e.message); }
+});
+$("resumebtn").addEventListener("click", async () => {
+  try { await api(`/api/runs/${runId}/resume`); setStatus("Relaunched: resuming from the SQLite checkpoint."); }
+  catch (e) { setStatus(e.message); }
+});
+$("drawerclose").addEventListener("click", () => $("drawer").classList.remove("show"));
+
+async function openReport(i) {
+  if (API === null || !runId) return;
+  $("drawer").classList.add("show");
+  $("drawerbody").innerHTML = "<p>Loading black box…</p>";
+  try {
+    const d = await api(`/api/runs/${runId}/report/${i}`, "GET");
+    $("drawerbody").innerHTML = d.format === "md" ? md(d.text)
+      : `<pre>${esc(d.format === "json" ? JSON.stringify(JSON.parse(d.text), null, 2) : d.text)}</pre>`;
+  } catch (e) { $("drawerbody").innerHTML = `<p>${esc(e.message)}</p>`; }
+}
+
+// Minimal markdown for incident reports: headings, tables, lists, rules, `code`, **bold**.
+function md(src) {
+  const inline = t => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  const lines = src.split("\n"), out = [];
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i];
+    if (/^\s*\|/.test(l)) {
+      const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++]);
+      const body = rows.filter(r => !/^\s*\|[\s:|-]+\|\s*$/.test(r));
+      out.push("<table>" + body.map((r, k) => `<tr>${cells(r).map(c => k ? `<td>${inline(c)}</td>` : `<th>${inline(c)}</th>`).join("")}</tr>`).join("") + "</table>");
+      continue;
+    }
+    if (/^\s*[-*] /.test(l)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*] /.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(/^\s*[-*] /, ""))}</li>`);
+      out.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+    const h = l.match(/^(#{1,6}) (.*)/);
+    if (h) out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+    else if (/^---+\s*$/.test(l)) out.push("<hr>");
+    else if (l.trim()) out.push(`<p>${inline(l)}</p>`);
+    i++;
+  }
+  return out.join("");
+}
+
 layoutPads(7);
 evaluateMode();
-poll(); heartbeat();
+if (API !== null) { document.body.classList.add("api"); pollApi(); }
+else { poll(); heartbeat(); }
 </script>
 </body>
 </html>

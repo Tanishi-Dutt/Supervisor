@@ -14,3 +14,5 @@ viewer/heartbeat.json
 viewer/*.tmp
 data/
 flight_recorder.db
+public/
+runs/

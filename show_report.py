@@ -15,10 +15,11 @@ from rich.syntax import Syntax
 console = Console()
 
 
-def find_report(key: str) -> Path | None:
-    session = Path(".session").read_text().strip() if Path(".session").exists() else ""
+def find_report(key: str, root: Path = Path(".")) -> Path | None:
+    session_file = root / ".session"
+    session = session_file.read_text().strip() if session_file.exists() else ""
     key = key.lower()
-    matches = sorted(p for p in Path("reports").glob(f"{session}-*")
+    matches = sorted(p for p in (root / "reports").glob(f"{session}-*")
                      if p.stem.split("-", 2)[1] == key or key in p.stem.split("-", 2)[2])
     return matches[0] if matches else None
 
