@@ -11,19 +11,51 @@ survives `kill -9`. Its goal:
 The LLM (Qwen 3.5 9B via Ollama today) is only its **pluggable reasoning engine**. The
 goal, control loop, tools, memory, safety policy and kill switches are our code.
 
-## One-command demos
+## Setup (macOS, once)
+
+Requirements: Python 3.12, [Ollama](https://ollama.com) running locally, about 8 GB free
+for the model. No API keys, no paid services.
 
 ```bash
-source .venv/bin/activate              # needs: Ollama running + `ollama pull qwen3.5:9b`
-python agent_demo.py live              # LIVE: real Qwen worker fixes a bug; an injected fault hits; the supervisor rescues it
-python agent_demo.py kill              # LIVE: STOP_AGENT on a worker + STOP_LOCAL_MODEL (refuses while shared, then unloads)
-python crash_recovery_check.py         # LIVE: kill -9 the supervisor mid-task, restart, verify it resumes from SQLite
-python agent_demo.py scripted          # SIMULATED workers (the 7 scripted victims), LIVE supervisor reasoning
-python agent_demo.py scripted --offline  # same, no LLM (rule-based fallback, labelled as such)
-python run_demo.py --fresh             # the original team demo, unchanged
+cd ~/Downloads/Supervisor-
+git switch feature/supervisor-agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt -r requirements-dev.txt
+ollama pull qwen3.5:9b                 # skip if `ollama list` already shows it
+curl -s localhost:11434/api/tags       # Ollama must answer; the list must include qwen3.5:9b
+python -m pytest -q                    # expect: 112 passed (no LLM needed)
 ```
 
-Tests: `python -m pytest -q` (112 tests; no LLM needed).
+To use a different installed tag, set `OLLAMA_MODEL=<tag>` or pass `--model <tag>`. If
+the model is missing, the live demos exit with an error instead of faking output.
+
+## Demos (run from the repo root with the venv active)
+
+| Command | Takes | What you should see |
+|---|---|---|
+| `python agent_demo.py live` | ~45 s | LIVE Qwen worker reads, edits, hits `[INJECTED FAULT]` 429s → DETECT → REASON (LIVE Qwen) → POLICY APPROVED `retry_with_backoff` → worker pauses 12 s → tests pass → **COMPLETED (recovered)**, supervisor's own pytest: 3 passed |
+| `python agent_demo.py kill` | ~25 s | step budget (deliberately 2) runs out → POLICY VETO → STOP_AGENT report `verified: True` → STOP_LOCAL_MODEL **refused** (shared with `supervisor:reasoning`) → then **unloaded** |
+| `python crash_recovery_check.py` | ~60 s | SIGKILLs the supervisor after 3 worker steps, relaunches with `--resume`, prints 8 PASS lines |
+| `python agent_demo.py scripted` | ~40 s | SIMULATED 7 victims, LIVE Qwen reasoning → `7/7 expected outcomes` |
+| `python agent_demo.py scripted --offline` | ~1 s | same with the rule-based fallback, no LLM |
+| `python run_demo.py --fresh` | ~10 s | the original team demo, unchanged |
+
+Run `kill` last on stage: it unloads the model, so the next live run spends ~2 s reloading it.
+
+Manual crash demo instead of the script: start `python agent_demo.py live`, note the
+"supervisor PID" in the banner, run `kill -9 <that PID>` from a second terminal after a
+few steps, then run `python agent_demo.py live --resume`. Look for the yellow
+**RESTORED FROM SQLITE CHECKPOINT** line. The worker continues from its next step.
+
+Where things go: run directories (sandbox, worker events, logs) are in
+`$TMPDIR/flight_recorder_runs/<session>/`; SQLite is `data/flight_recorder.sqlite3`
+(override with `FLIGHT_RECORDER_DB`); incident reports are in `reports/`. All are
+git-ignored or outside the repo.
+
+Troubleshooting: "Model … is not available" means Ollama isn't running or the tag isn't
+pulled. If a demo is interrupted with Ctrl-C, its worker exits by itself within a few
+seconds, because workers exit when their supervisor is gone.
 
 ## Architecture
 
