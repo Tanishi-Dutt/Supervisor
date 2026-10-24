@@ -40,9 +40,23 @@ Done check: `python3 run_demo.py --fresh --no-live --speed 0` ends with
 
 Two panes, font zoomed. Warm up Ollama first (one dummy request) so the first diagnosis isn't slow.
 
-1. `python3 run_demo.py --fresh --stage` (1s per tick, ~25s run). Point at loops caught, timeout backing off, agent 7 untouched.
+1. `python3 run_demo.py --fresh --stage --viewer` (1s per tick, ~25s run; opens the city view at http://localhost:8765/viewer/). Point at loops caught, timeout backing off, agent 7 untouched.
 2. Other pane, around tick 6–8: `./kill.sh`
 3. `python3 run_demo.py --stage`: title shows **RESUMED from checkpoint**; the Liar starts lying at step 10, gets flagged, and the **POLICY VETO** line stays pinned in red.
 4. Results table stays up until Enter. Then `python3 show_report.py 6` for the Liar's black box.
 
 The agents are scripted simulations (no real tools, no sandbox): every run behaves the same, offline.
+
+## City view
+
+`--viewer` starts a small static server (separate process, so it survives `kill -9`) and opens
+`viewer/index.html`. The page polls `viewer/live.json` (written every tick) and
+`viewer/heartbeat.json` (every 0.5s). It only reads: nothing in the browser can affect a run.
+
+- Worker bots walk to the building for their current tool: Library (search), Archive (read_file,
+  list_dir), Workshop (edit, patch), Test Lab (run_tests, lint), Network (fetch, call_api).
+- The dark supervisor drone flies to each flagged bot: LLM proposal, then the policy verdict
+  (red VETOED stamp on the Liar).
+- Heartbeat older than 2s means **SUPERVISOR KILLED**: bots freeze and turn grey. On restart the page shows
+  **RESUMED from checkpoint**.
+- Results pop up when the run ends; press R to toggle.

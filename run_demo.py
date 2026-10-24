@@ -1,6 +1,7 @@
 """Launch all 7 victims under the supervisor (Dev A).
 
     python run_demo.py --fresh        # new run
+    python run_demo.py --viewer       # also open the browser city view
     python run_demo.py                # resume the last run (e.g. after kill -9)
     python run_demo.py --fake         # force all Dev B / Dev C modules to fakes
 """
@@ -17,6 +18,7 @@ from rich.table import Table
 from rich.text import Text
 
 import fakes
+import viewer_feed
 from interfaces import LAST_N_STEPS, STEP_BUDGET
 from victims import make_all
 
@@ -155,26 +157,64 @@ class Demo:
         pinned = [f"[on red] ! [/] {m}" for m in self.pinned]
         return Group(self.status_table(), Text.from_markup("\n".join(pinned + rolling) or " "))
 
-    def results_table(self) -> Table:
-        t = Table(title="Results")
-        for col in ("Agent", "Expected", "Actual", "", "Steps to detect", "Interventions",
-                    "Vetoes", "Wasted calls saved"):
-            t.add_column(col)
-        loops = false_stops = passed = 0
+    def results(self) -> tuple[list[dict], str]:
+        rows, loops, false_stops = [], 0, 0
         for a in self.agents:
             meta = self.recs[a.run_id]["meta"]
-            ok = meta["outcome"] == a.EXPECTED_OUTCOME
-            passed += ok
             false_stops += meta["outcome"] == "stopped" and a.EXPECTED_OUTCOME != "stopped"
             false_stops += a.EXPECTED_OUTCOME == "success_untouched" and meta["interventions"] > 0
             loops += any(e["flag"]["kind"] in ("loop", "flipflop") for e in meta["events"])
-            saved = UNSUPERVISED_CAP - a.state["step"] if a.LOOPS_FOREVER else 0
-            t.add_row(a.name, a.EXPECTED_OUTCOME, meta["outcome"], "✅" if ok else "❌",
-                      str(meta["first_flag_step"] or "—"), str(meta["interventions"]),
-                      str(meta["vetoes"]), str(saved))
-        t.caption = (f"{passed}/{len(self.agents)} expected outcomes · loops caught: {loops} · "
-                     f"false stops: {false_stops}")
+            rows.append({"agent": a.name, "expected": a.EXPECTED_OUTCOME, "actual": meta["outcome"],
+                         "ok": meta["outcome"] == a.EXPECTED_OUTCOME,
+                         "detect": meta["first_flag_step"], "interventions": meta["interventions"],
+                         "vetoes": meta["vetoes"],
+                         "saved": UNSUPERVISED_CAP - a.state["step"] if a.LOOPS_FOREVER else 0})
+        passed = sum(r["ok"] for r in rows)
+        return rows, (f"{passed}/{len(rows)} expected outcomes · loops caught: {loops} · "
+                      f"false stops: {false_stops}")
+
+    def results_table(self) -> Table:
+        rows, summary = self.results()
+        t = Table(title="Results", caption=summary)
+        for col in ("Agent", "Expected", "Actual", "", "Steps to detect", "Interventions",
+                    "Vetoes", "Wasted calls saved"):
+            t.add_column(col)
+        for r in rows:
+            t.add_row(r["agent"], r["expected"], r["actual"], "✅" if r["ok"] else "❌",
+                      str(r["detect"] or "—"), str(r["interventions"]), str(r["vetoes"]),
+                      str(r["saved"]))
         return t
+
+    def snapshot(self, faked: list[str]) -> dict:
+        """Everything the browser city view draws; written to viewer/live.json each tick."""
+        agents = []
+        for a in self.agents:
+            meta, hist = self.recs[a.run_id]["meta"], self.recs[a.run_id]["history"]
+            last = hist[-1] if hist else None
+            ev = meta["events"][-1] if meta["events"] else None
+            status = meta["outcome"]
+            if status == "running" and ev:
+                status = "recovering"
+            agents.append({
+                "index": a.index, "name": a.name, "step": a.state["step"], "status": status,
+                "action": last["action"] if last else None,
+                "result": last["result"] if last else "",
+                "claimed": last["claimed_status"] if last else None,
+                "passed": last["evidence"]["test_passed"] if last else False,
+                "events": len(meta["events"]),
+                "last_event": ev and {"step": ev["step"], "flag": ev["flag"]["kind"],
+                                      "detail": ev["flag"]["detail"],
+                                      "proposed": ev["proposal"].get("action"),
+                                      "action": ev["action"], "vetoed": ev["vetoed"]},
+            })
+        done = not self.active()
+        rows, summary = self.results() if done else (None, None)
+        plain = lambda m: Text.from_markup(m).plain
+        return {"session": self.agents[0].run_id.split("-")[0], "resumed_at": self.resumed_at,
+                "finished": done, "faked": faked, "agents": agents,
+                "pinned": [plain(m) for m in self.pinned],
+                "log": [plain(m) for m in self.log if m not in self.pinned][-8:],
+                "results": rows, "summary": summary}
 
 
 def main():
@@ -185,6 +225,8 @@ def main():
     ap.add_argument("--speed", type=float, default=0.4, help="seconds per tick")
     ap.add_argument("--stage", action="store_true",
                     help="on-stage pacing (1s/tick) and hold the results table until Enter")
+    ap.add_argument("--viewer", action="store_true", help="serve and open the browser city view")
+    ap.add_argument("--port", type=int, default=8765, help="port for --viewer")
     args = ap.parse_args()
     if args.stage:
         args.speed = 1.0
@@ -199,10 +241,16 @@ def main():
         console.print(f"[dim]using fakes for: {', '.join(faked)}[/]")
 
     demo = Demo(fns, session)
+    publish = lambda: viewer_feed.write_json("live.json", demo.snapshot(faked))
+    viewer_feed.start_heartbeat()
+    publish()
+    if args.viewer:
+        console.print(f"[bold]City view:[/] {viewer_feed.serve(args.port)}")
     if args.no_live:
         shown = 0
         while demo.active():
             demo.tick()
+            publish()
             for line in demo.log[shown:]:
                 console.print(line)
             shown = len(demo.log)
@@ -211,6 +259,7 @@ def main():
         with Live(demo.view(), console=console, refresh_per_second=8) as live:
             while demo.active():
                 demo.tick()
+                publish()
                 live.update(demo.view())
                 time.sleep(args.speed)
     console.print(demo.results_table())
