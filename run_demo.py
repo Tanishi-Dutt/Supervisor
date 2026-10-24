@@ -37,9 +37,7 @@ def load_modules(force_fake: bool) -> tuple[dict, list[str]]:
         try:
             if force_fake:
                 raise ImportError
-            module = importlib.import_module(mod)
-            # policy.py exposes its function on a singleton (policy.policy.approve)
-            fns[key] = getattr(module, attr, None) or getattr(getattr(module, mod), attr)
+            fns[key] = getattr(importlib.import_module(mod), attr)
         except (ImportError, AttributeError):
             fns[key] = getattr(fakes, attr)
             faked.append(f"{mod}.{attr}")
@@ -74,6 +72,13 @@ class Demo:
         if self.resumed_at is not None:
             self.say(f"[bold yellow]Resumed {len(self.agents)} agents from checkpoint "
                      f"(up to step {self.resumed_at})[/]")
+        for a in self.agents:
+            # A crash between "checkpoint done" and "report written" leaves a
+            # terminal-but-unreported run that active() would otherwise never
+            # revisit (it only ticks outcome=="running" agents). Retry once on
+            # startup; finish_report() is a no-op if already reported.
+            if self.recs[a.run_id]["meta"]["outcome"] != "running":
+                self.finish_report(a)
 
     def say(self, msg, pin=False):
         self.log.append(msg)
@@ -102,7 +107,9 @@ class Demo:
             except Exception as e:  # LLM down or broken JSON: rule-based fallback
                 proposal = fakes.diagnose(window[-LAST_N_STEPS:], flag)
                 self.say(f"[yellow]diagnose failed ({e}); rule-based fallback[/]")
-            action = fns["approve"](proposal, step["evidence"])
+            # The step carries the agent's claimed_status, which the policy needs
+            # to veto an LLM that was talked into trusting a false success claim.
+            action = fns["approve"](proposal, step["evidence"], step)
             vetoed = action != proposal.get("action")
             meta["interventions"] += 1
             meta["vetoes"] += vetoed
@@ -121,12 +128,23 @@ class Demo:
         if a.state["done"]:
             meta["outcome"] = ("stopped" if a.state["stopped"]
                                else "recovered" if meta["interventions"] else "success_untouched")
-            meta["reported"] = True  # set before saving: the store is write-once per step
         fns["save"](a.run_id, step["step"], rec)
 
-        if a.state["done"]:
-            path = fns["write_report"](a.run_id)
-            self.say(f"[bold]{a.name}[/] {meta['outcome']} — report: {path}")
+        if a.state["done"] and not meta["reported"]:
+            self.finish_report(a)
+
+    def finish_report(self, a):
+        """Write + flag the report for a terminal-outcome agent. Idempotent:
+        a no-op once meta['reported'] is True, so it's safe to call again
+        after a crash left a run done-but-unreported."""
+        rec, meta, fns = self.recs[a.run_id], self.recs[a.run_id]["meta"], self.fns
+        if meta["reported"]:
+            return
+        last_step = rec["history"][-1]["step"] if rec["history"] else 0
+        path = fns["write_report"](a.run_id)
+        meta["reported"] = True
+        fns["save"](a.run_id, last_step, rec)
+        self.say(f"[bold]{a.name}[/] {meta['outcome']} — report: {path}")
 
     # --- display -----------------------------------------------------------
     def status_table(self) -> Table:

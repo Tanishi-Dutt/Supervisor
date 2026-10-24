@@ -23,7 +23,7 @@ its stand-in in `fakes.py`; the runner prints which ones are faked.
 |---|---|---|
 | Dev A | `victims.py`, `run_demo.py` | `agent.next_step(state) -> Step`, `agent.apply(action)` |
 | Dev B | `watchdog.py`, `store.py` | `check(history) -> Flag \| None`, `save(run_id, step, state)`, `load_last(run_id) -> state` |
-| Dev C | `diagnose.py`, `policy.py`, `report.py` | `diagnose(last_steps, flag) -> Proposal`, `approve(proposal, evidence) -> action`, `write_report(run_id) -> path` |
+| Dev C | `diagnose.py`, `policy.py`, `report.py` | `diagnose(last_steps, flag) -> Proposal`, `approve(proposal, evidence, step=None) -> action`, `write_report(run_id) -> path` |
 
 Things to know when integrating:
 - `check()` receives only the steps **since the last intervention**, so a handled loop isn't re-flagged.
