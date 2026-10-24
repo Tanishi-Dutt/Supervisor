@@ -33,3 +33,8 @@ class PolicyEngine:
 
 # Singleton instance for import compatibility
 policy = PolicyEngine()
+
+def approve(proposal: dict, evidence: dict, step: dict = None) -> str:
+    """Module-level entry point matching the team contract (README / run_demo.py
+    import `policy.approve`). Delegates to the singleton."""
+    return policy.approve(proposal, evidence, step)
