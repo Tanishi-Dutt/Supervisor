@@ -1,9 +1,13 @@
 import json
+import os
 import urllib.request
 import urllib.error
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "qwen3.5:9b"
+# OLLAMA_MODEL overrides the tag (see interfaces.py); check yours with `ollama list`.
+MODEL_NAME = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
+# Covers a cold model load (~2s on a 9B model) plus a ~2s answer.
+TIMEOUT_SECONDS = float(os.environ.get("DIAGNOSE_TIMEOUT", "15"))
 ALLOWED_ACTIONS = {"retry_with_backoff", "change_strategy", "rollback", "stop"}
 
 # Fallback lookup in case LLM is slow, fails, or returns malformed JSON
@@ -16,11 +20,14 @@ FALLBACK_ACTIONS = {
 
 def fallback_diagnose(flag: dict) -> dict:
     kind = flag.get("kind", "budget")
-    return FALLBACK_ACTIONS.get(kind, {
+    result = dict(FALLBACK_ACTIONS.get(kind, {
         "failure_type": "Unknown Failure",
         "root_cause": flag.get("detail", "Unspecified anomaly"),
         "action": "stop"
-    })
+    }))
+    # Lets the runner and report tell an LLM diagnosis from the rule-based one.
+    result["source"] = "fallback"
+    return result
 
 def diagnose(last_steps: list[dict], flag: dict) -> dict:
     """
@@ -37,10 +44,11 @@ Recent Agent Execution Steps (up to last 8):
 {json.dumps(recent_history, indent=2)}
 
 Analyze the failure and select EXACTLY ONE of these whitelisted actions:
-1. "retry_with_backoff"
-2. "change_strategy"
-3. "rollback"
-4. "stop"
+1. "retry_with_backoff": the failure looks transient (timeouts, rate limits); wait and try again.
+2. "change_strategy": the agent is repeating an approach that is not working but the task is still achievable; make it try something different.
+3. "rollback": the agent is undoing and redoing its own changes; revert to the last good state.
+4. "stop": the task cannot be completed (budget exhausted) or the agent is reporting success that the evidence contradicts.
+Stopping ends the run for good, so prefer a recovery action when one is plausible.
 
 Respond strictly in valid JSON with no extra commentary or markdown formatting outside JSON:
 {{
@@ -54,6 +62,10 @@ Respond strictly in valid JSON with no extra commentary or markdown formatting o
         "prompt": prompt,
         "format": "json",
         "stream": False,
+        # Qwen 3.5 thinks by default: ~15k hidden tokens and ~100s per call,
+        # which always blew the timeout. Without it a diagnosis takes ~2s.
+        "think": False,
+        "keep_alive": "30m",
         "options": {
             "temperature": 0.1
         }
@@ -66,14 +78,20 @@ Respond strictly in valid JSON with no extra commentary or markdown formatting o
             headers={'Content-Type': 'application/json'},
             method='POST'
         )
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             response_text = res_data.get("response", "{}")
             result = json.loads(response_text)
 
-            action = result.get("action")
-            if action not in ALLOWED_ACTIONS:
-                result["action"] = fallback_diagnose(flag)["action"]
+            if not isinstance(result, dict):
+                return fallback_diagnose(flag)
+            fallback = fallback_diagnose(flag)
+            if result.get("action") not in ALLOWED_ACTIONS:
+                result["action"] = fallback["action"]
+            for key in ("failure_type", "root_cause"):
+                if not isinstance(result.get(key), str) or not result[key].strip():
+                    result[key] = fallback[key]
+            result["source"] = MODEL_NAME
 
             return result
 
