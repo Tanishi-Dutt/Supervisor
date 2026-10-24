@@ -8,3 +8,5 @@ reports/
 viewer/live.json
 viewer/heartbeat.json
 viewer/*.tmp
+data/
+flight_recorder.db

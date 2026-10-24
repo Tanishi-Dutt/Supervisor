@@ -37,7 +37,9 @@ def load_modules(force_fake: bool) -> tuple[dict, list[str]]:
         try:
             if force_fake:
                 raise ImportError
-            fns[key] = getattr(importlib.import_module(mod), attr)
+            module = importlib.import_module(mod)
+            # policy.py exposes its function on a singleton (policy.policy.approve)
+            fns[key] = getattr(module, attr, None) or getattr(getattr(module, mod), attr)
         except (ImportError, AttributeError):
             fns[key] = getattr(fakes, attr)
             faked.append(f"{mod}.{attr}")
@@ -119,12 +121,11 @@ class Demo:
         if a.state["done"]:
             meta["outcome"] = ("stopped" if a.state["stopped"]
                                else "recovered" if meta["interventions"] else "success_untouched")
+            meta["reported"] = True  # set before saving: the store is write-once per step
         fns["save"](a.run_id, step["step"], rec)
 
-        if a.state["done"] and not meta["reported"]:
+        if a.state["done"]:
             path = fns["write_report"](a.run_id)
-            meta["reported"] = True
-            fns["save"](a.run_id, step["step"], rec)
             self.say(f"[bold]{a.name}[/] {meta['outcome']} — report: {path}")
 
     # --- display -----------------------------------------------------------
