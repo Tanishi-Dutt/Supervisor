@@ -59,16 +59,22 @@ class Demo:
     def __init__(self, fns, session):
         self.fns = fns
         self.agents = make_all(session)
-        self.recs, self.log = {}, []
+        self.recs, self.log, self.pinned = {}, [], []
+        self.resumed_at = None  # highest checkpointed step, if this run is a resume
         for a in self.agents:
             rec = fns["load_last"](a.run_id)
             if rec:
                 a.state = rec["agent"]
-                self.say(f"[cyan]{a.name}[/] resumed from checkpoint at step {a.state['step']}")
+                self.resumed_at = max(self.resumed_at or 0, a.state["step"])
             self.recs[a.run_id] = rec or new_record(a)
+        if self.resumed_at is not None:
+            self.say(f"[bold yellow]Resumed {len(self.agents)} agents from checkpoint "
+                     f"(up to step {self.resumed_at})[/]")
 
-    def say(self, msg):
+    def say(self, msg, pin=False):
         self.log.append(msg)
+        if pin:
+            self.pinned.append(msg)
 
     def active(self):
         return [a for a in self.agents if self.recs[a.run_id]["meta"]["outcome"] == "running"]
@@ -104,7 +110,7 @@ class Demo:
                 msg += f" → LLM proposed [yellow]{proposal.get('action')}[/], [bold red]POLICY VETO[/] → {action}"
             else:
                 msg += f" → {action}"
-            self.say(msg)
+            self.say(msg, pin=vetoed or flag["kind"] == "deception")
             a.apply(action)
             meta["window_start"] = len(rec["history"])
 
@@ -121,7 +127,10 @@ class Demo:
 
     # --- display -----------------------------------------------------------
     def status_table(self) -> Table:
-        t = Table(title="Agent Flight Recorder — live", expand=True)
+        title = "Agent Flight Recorder — live"
+        if self.resumed_at is not None:
+            title += f"  [bold yellow]RESUMED from checkpoint (step {self.resumed_at})[/]"
+        t = Table(title=title, expand=True)
         for col in ("#", "Agent", "Step", "Last action", "Status", "Last flag", "Action"):
             t.add_column(col)
         for a in self.agents:
@@ -142,7 +151,9 @@ class Demo:
         return t
 
     def view(self):
-        return Group(self.status_table(), Text.from_markup("\n".join(self.log[-8:]) or " "))
+        rolling = [m for m in self.log if m not in self.pinned][-8:]
+        pinned = [f"[on red] ! [/] {m}" for m in self.pinned]
+        return Group(self.status_table(), Text.from_markup("\n".join(pinned + rolling) or " "))
 
     def results_table(self) -> Table:
         t = Table(title="Results")
@@ -172,7 +183,11 @@ def main():
     ap.add_argument("--fake", action="store_true", help="use fakes for all Dev B / Dev C modules")
     ap.add_argument("--no-live", action="store_true", help="plain log instead of live table")
     ap.add_argument("--speed", type=float, default=0.4, help="seconds per tick")
+    ap.add_argument("--stage", action="store_true",
+                    help="on-stage pacing (1s/tick) and hold the results table until Enter")
     args = ap.parse_args()
+    if args.stage:
+        args.speed = 1.0
 
     fns, faked = load_modules(args.fake)
     if args.fresh and fns["save"] is fakes.save:
@@ -199,6 +214,8 @@ def main():
                 live.update(demo.view())
                 time.sleep(args.speed)
     console.print(demo.results_table())
+    if args.stage:
+        input("Press Enter to exit")
 
 
 if __name__ == "__main__":

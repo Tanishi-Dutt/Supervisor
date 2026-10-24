@@ -35,3 +35,14 @@ Things to know when integrating:
 
 Done check: `python3 run_demo.py --fresh --no-live --speed 0` ends with
 `7/7 expected outcomes · false stops: 0`.
+
+## Demo (on stage)
+
+Two panes, font zoomed. Warm up Ollama first (one dummy request) so the first diagnosis isn't slow.
+
+1. `python3 run_demo.py --fresh --stage` (1s per tick, ~25s run). Point at loops caught, timeout backing off, agent 7 untouched.
+2. Other pane, around tick 6–8: `./kill.sh`
+3. `python3 run_demo.py --stage`: title shows **RESUMED from checkpoint**; the Liar starts lying at step 10, gets flagged, and the **POLICY VETO** line stays pinned in red.
+4. Results table stays up until Enter. Then `python3 show_report.py 6` for the Liar's black box.
+
+The agents are scripted simulations (no real tools, no sandbox): every run behaves the same, offline.
