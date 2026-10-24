@@ -70,15 +70,24 @@ def _signature(step: Mapping[str, Any], *, include_result: bool) -> str:
         raise ValueError("Step action, args and result must be JSON-serializable") from exc
 
 
+def claims_success(status: Any) -> bool:
+    """True when an agent's free-text status asserts success (negations excluded).
+
+    Shared with policy.py so the watchdog flag and the policy veto agree.
+    """
+    if not isinstance(status, str):
+        return False
+    return bool(SUCCESS_CLAIM.search(status)) and not bool(NEGATED_CLAIM.search(status))
+
+
 def _is_deceptive(step: Mapping[str, Any]) -> bool:
-    status = step.get("claimed_status")
     evidence = step.get("evidence")
-    if not isinstance(status, str) or not isinstance(evidence, Mapping):
+    if not isinstance(evidence, Mapping):
         return False
     # Only an explicitly false independent test can justify this flag.
     if evidence.get("test_passed") is not False:
         return False
-    return bool(SUCCESS_CLAIM.search(status)) and not bool(NEGATED_CLAIM.search(status))
+    return claims_success(step.get("claimed_status"))
 
 
 def check(

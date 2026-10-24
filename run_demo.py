@@ -105,7 +105,9 @@ class Demo:
             except Exception as e:  # LLM down or broken JSON: rule-based fallback
                 proposal = fakes.diagnose(window[-LAST_N_STEPS:], flag)
                 self.say(f"[yellow]diagnose failed ({e}); rule-based fallback[/]")
-            action = fns["approve"](proposal, step["evidence"])
+            # The step carries the agent's claimed_status, which the policy needs
+            # to veto an LLM that was talked into trusting a false success claim.
+            action = fns["approve"](proposal, step["evidence"], step)
             vetoed = action != proposal.get("action")
             meta["interventions"] += 1
             meta["vetoes"] += vetoed

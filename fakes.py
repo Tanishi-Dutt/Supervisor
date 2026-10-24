@@ -70,7 +70,7 @@ def diagnose(last_steps: list[Step], flag: Flag) -> Proposal:
 
 
 # --- policy (Dev C) ---------------------------------------------------------
-def approve(proposal: Proposal, evidence: dict) -> str:
+def approve(proposal: Proposal, evidence: dict, step: Step | None = None) -> str:
     action = proposal.get("action")
     if action not in ACTIONS:
         return "stop"  # never let a non-whitelisted verdict (e.g. "mark_healthy") through
