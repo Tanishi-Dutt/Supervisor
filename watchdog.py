@@ -92,9 +92,14 @@ def check(
     Precedence: deceptive success claim -> resource budget -> repeat loop ->
     alternating action flip-flop. Call before executing the *next* step to
     enforce the exhausted budget. The fixed Step contract has no timing or
-    retry fields, so runtime must supply those values for those two budgets.
+    retry fields; Step.evidence may supply retries_used, and runtime may
+    supply explicit overrides (including elapsed-time context).
 
     ``history`` must refer to a single run, ordered oldest to newest.
+    Shared budgets come from interfaces.py when available. In the team runner,
+    a Step's integer ``step`` field counts the entire run even when this input
+    includes only post-intervention steps; ``evidence.retries_used`` supplies the
+    optional retry budget when the runner doesn't pass runtime explicitly.
     """
     if not isinstance(history, list):
         raise TypeError("history must be a list")
@@ -103,7 +108,15 @@ def check(
     run_ids = {str(s.get("run_id")) for s in history if s.get("run_id") is not None}
     if len(run_ids) > 1:
         raise ValueError("history must contain steps from one run only")
-    limits = limits if limits is not None else BudgetLimits()
+    if limits is None:
+        # In the team repository, use the agreed shared budgets; standalone
+        # Dev B tests still work without interfaces.py.
+        try:
+            from interfaces import STEP_BUDGET, RETRY_BUDGET
+        except ImportError:
+            limits = BudgetLimits()
+        else:
+            limits = BudgetLimits(max_steps=STEP_BUDGET, max_retries=RETRY_BUDGET)
     runtime = runtime if runtime is not None else {}
 
     if history and _is_deceptive(history[-1]):
@@ -112,7 +125,9 @@ def check(
             "evidence has test_passed=False"
         )}
 
-    steps_taken = runtime.get("steps_taken", len(history))
+    # Dev A passes a post-intervention window, not the full run. The Step.step
+    # index is the total run step count, even when the window has been reset.
+    steps_taken = runtime.get("steps_taken", history[-1].get("step", len(history)) if history else 0)
     if type(steps_taken) is not int or steps_taken < 0:
         raise ValueError("runtime.steps_taken must be a nonnegative integer")
     if steps_taken >= limits.max_steps:
@@ -120,8 +135,10 @@ def check(
             f"Step budget exhausted: {steps_taken}/{limits.max_steps} steps used"
         )}
 
-    if "retry_count" in runtime:
-        retries = runtime["retry_count"]
+    # The team's Evidence includes an optional retries_used field.
+    last_evidence = history[-1].get("evidence", {}) if history else {}
+    retries = runtime.get("retry_count", last_evidence.get("retries_used") if isinstance(last_evidence, Mapping) else None)
+    if retries is not None:
         if type(retries) is not int or retries < 0:
             raise ValueError("runtime.retry_count must be a nonnegative integer")
         if retries >= limits.max_retries:

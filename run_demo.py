@@ -70,6 +70,13 @@ class Demo:
         if self.resumed_at is not None:
             self.say(f"[bold yellow]Resumed {len(self.agents)} agents from checkpoint "
                      f"(up to step {self.resumed_at})[/]")
+        for a in self.agents:
+            # A crash between "checkpoint done" and "report written" leaves a
+            # terminal-but-unreported run that active() would otherwise never
+            # revisit (it only ticks outcome=="running" agents). Retry once on
+            # startup; finish_report() is a no-op if already reported.
+            if self.recs[a.run_id]["meta"]["outcome"] != "running":
+                self.finish_report(a)
 
     def say(self, msg, pin=False):
         self.log.append(msg)
@@ -120,10 +127,20 @@ class Demo:
         fns["save"](a.run_id, step["step"], rec)
 
         if a.state["done"] and not meta["reported"]:
-            path = fns["write_report"](a.run_id)
-            meta["reported"] = True
-            fns["save"](a.run_id, step["step"], rec)
-            self.say(f"[bold]{a.name}[/] {meta['outcome']} — report: {path}")
+            self.finish_report(a)
+
+    def finish_report(self, a):
+        """Write + flag the report for a terminal-outcome agent. Idempotent:
+        a no-op once meta['reported'] is True, so it's safe to call again
+        after a crash left a run done-but-unreported."""
+        rec, meta, fns = self.recs[a.run_id], self.recs[a.run_id]["meta"], self.fns
+        if meta["reported"]:
+            return
+        last_step = rec["history"][-1]["step"] if rec["history"] else 0
+        path = fns["write_report"](a.run_id)
+        meta["reported"] = True
+        fns["save"](a.run_id, last_step, rec)
+        self.say(f"[bold]{a.name}[/] {meta['outcome']} — report: {path}")
 
     # --- display -----------------------------------------------------------
     def status_table(self) -> Table:

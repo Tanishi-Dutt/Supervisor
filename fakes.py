@@ -79,7 +79,14 @@ def approve(proposal: Proposal, evidence: dict) -> str:
 
 # --- report (Dev C) ---------------------------------------------------------
 def write_report(run_id: str) -> str:
-    state = load_last(run_id) or {}
+    # run_demo.py persists through store.save/load_last whenever store.py is
+    # present (the common case: only diagnose/policy/report are faked), so
+    # this fallback must read the same place or every report comes out empty.
+    try:
+        from store import load_last as _real_load_last
+    except ImportError:
+        _real_load_last = None
+    state = (_real_load_last(run_id) if _real_load_last else None) or load_last(run_id) or {}
     out = Path("reports") / f"{run_id}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({"run_id": run_id, **state.get("meta", {}),

@@ -23,7 +23,7 @@ from typing import Any, Mapping, TypedDict
 
 
 class CheckpointConflictError(ValueError):
-    """A step already exists with different data."""
+    """A step already exists with different data, apart from final report completion."""
 
 
 class StaleCheckpointError(ValueError):
@@ -85,6 +85,31 @@ def _json_encode(value: Any, label: str) -> str:
         raise ValueError(f"{label} must be JSON serializable") from exc
 
 
+
+def _is_final_report_update(before_json: str, after_json: str) -> bool:
+    """Allow exactly one state change after the report has been written.
+
+    Dev A checkpoints the completed run, writes its report from that checkpoint,
+    and then checkpoints the same step with meta.reported=True. Nothing else
+    is allowed to change; this preserves conflict protection for agent state.
+    """
+    before = json.loads(before_json)
+    after = json.loads(after_json)
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    before_meta = before.get("meta")
+    after_meta = after.get("meta")
+    if not isinstance(before_meta, dict) or not isinstance(after_meta, dict):
+        return False
+    if before_meta.get("reported") is not False or after_meta.get("reported") is not True:
+        return False
+    if before_meta.get("outcome") not in {"recovered", "stopped", "success_untouched"}:
+        return False
+    before_without_reported = {**before, "meta": {k: v for k, v in before_meta.items() if k != "reported"}}
+    after_without_reported = {**after, "meta": {k: v for k, v in after_meta.items() if k != "reported"}}
+    return before_without_reported == after_without_reported
+
+
 def save(
     run_id: str,
     step: int | Mapping[str, Any],
@@ -116,11 +141,25 @@ def save(
                 "WHERE run_id=? AND step_number=?", (run_id, number)
             ).fetchone()
             if row is not None:
-                if row["step_json"] != step_json or row["state_json"] != state_json:
-                    raise CheckpointConflictError(
-                        f"Conflicting checkpoint for run={run_id!r}, step={number}"
-                    )
-                return
+                if row["step_json"] == step_json and row["state_json"] == state_json:
+                    return  # exact idempotent replay
+                if row["step_json"] == step_json and _is_final_report_update(
+                    row["state_json"], state_json
+                ):
+                    latest = con.execute(
+                        "SELECT MAX(step_number) AS latest FROM checkpoints WHERE run_id=?",
+                        (run_id,),
+                    ).fetchone()["latest"]
+                    if latest == number:
+                        con.execute(
+                            "UPDATE checkpoints SET state_json=?, saved_at=? "
+                            "WHERE run_id=? AND step_number=?",
+                            (state_json, time.time(), run_id, number),
+                        )
+                        return
+                raise CheckpointConflictError(
+                    f"Conflicting checkpoint for run={run_id!r}, step={number}"
+                )
             row = con.execute(
                 "SELECT MAX(step_number) AS latest FROM checkpoints WHERE run_id=?",
                 (run_id,),
